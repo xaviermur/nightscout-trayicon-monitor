@@ -1,0 +1,11 @@
+{
+  "Version": 1,
+  "ProjectMap": {
+    "fc58c62f-c16f-4ee0-9aef-9855c5129c5d": {
+      "ProjectGuid": "fc58c62f-c16f-4ee0-9aef-9855c5129c5d",
+      "DisplayName": "NightscoutTrayIconMonitor",
+      "ColorIndex": 0
+    }
+  },
+  "NextColorIndex": 1
+}

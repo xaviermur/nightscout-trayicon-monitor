@@ -15,13 +15,15 @@ namespace NightscoutTrayIconMonitor
     public class MonitorData
     {
         public int SGV { get; set; }
+        public int SGVOld { get; set; }
         public string Direction { get; set; }
         public DateTime ServerDateTime { get; set; }
         public DateTime LastReadDateTime { get; set; }
         public string Response { get; set; }
-        public MonitorData(int sgv, string direction, DateTime serverDateTime, DateTime lastReadDateTime, string response)
+        public MonitorData(int sgv, int sgvOld, string direction, DateTime serverDateTime, DateTime lastReadDateTime, string response)
         {
             SGV = sgv;
+            SGVOld = sgvOld;
             Direction = direction;
             ServerDateTime = serverDateTime;
             LastReadDateTime = lastReadDateTime;
@@ -37,6 +39,9 @@ namespace NightscoutTrayIconMonitor
         private ToolStripMenuItem CloseMenuItem;
         private int LastReadSGV;
         private DateTime LastReadDateTime;
+        private string ServerPath;
+        private string ServerToken;
+
         private enum TypeLog { DEBUG, INFO, ERROR };
         public MyApplicationContext()
         {
@@ -60,12 +65,21 @@ namespace NightscoutTrayIconMonitor
             TrayIcon.Icon = Properties.Resources.BloodIcon;
 
             //Optional - handle doubleclicks on the icon:
-            TrayIcon.Click += TrayIcon_Click;
+            TrayIcon.MouseClick += TrayIcon_Click;
 
             //Optional - Add a context menu to the TrayIcon:
             TrayIconContextMenu = new ContextMenuStrip();
             CloseMenuItem = new ToolStripMenuItem();
             TrayIconContextMenu.SuspendLayout();
+
+            ServerPath = System.Configuration.ConfigurationManager.AppSettings["Server"];
+            ServerToken = System.Configuration.ConfigurationManager.AppSettings["Token"];
+            if (string.IsNullOrEmpty(ServerPath) || string.IsNullOrEmpty(ServerToken))
+            {
+                MessageBox.Show("Please, update app.config server and token value and restart again.", "Wrong server info",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Application.Exit();
+            }
 
             // 
             // TrayIconContextMenu
@@ -107,27 +121,36 @@ namespace NightscoutTrayIconMonitor
             TrayIcon.Visible = false;
         }
 
-        private void TrayIcon_Click(object sender, EventArgs e)
+        private string GetOffset(int current, int previous)
+        {
+            string symbol = (current >= previous) ? "+" : "";
+            return symbol + (current - previous).ToString();
+        }
+
+        private void TrayIcon_Click(object sender, MouseEventArgs e)
         {
             try
             {
-                MonitorData md = GetMonitorData();
-                if (!LastReadDateTime.Equals(md.LastReadDateTime))
+                if(e.Button == MouseButtons.Left)
                 {
-                    LastReadSGV = md.SGV;
-                    LastReadDateTime = md.LastReadDateTime.AddHours(-1);
+                    MonitorData md = GetMonitorData();
+                    if (!LastReadDateTime.Equals(md.LastReadDateTime))
+                    {
+                        LastReadSGV = md.SGV;
+                        LastReadDateTime = md.LastReadDateTime.AddHours(-1);
+                    }
+                    string info = String.Join(
+                        Environment.NewLine,
+                        md.SGV.ToString() + " (" + GetOffset(md.SGV,md.SGVOld) + ")",
+                        md.Direction,
+                        (md.SGV - md.SGVOld).ToString(),
+                        ((md.ServerDateTime).Subtract(LastReadDateTime)).Minutes + "m.",
+                        md.Response
+                    );
+                    TrayIcon.BalloonTipText = info;
+                    TrayIcon.BalloonTipTitle = "Server response";
+                    TrayIcon.ShowBalloonTip(10000);
                 }
-                string info = String.Join(
-                    Environment.NewLine,
-                    md.SGV.ToString(),
-                    md.Direction,
-                    (md.SGV - LastReadSGV).ToString(),
-                    ((md.ServerDateTime).Subtract(LastReadDateTime)).Minutes + "m.",
-                    md.Response
-                );
-                TrayIcon.BalloonTipText = info;
-                TrayIcon.BalloonTipTitle = "Server response";
-                TrayIcon.ShowBalloonTip(10000);
             }
             catch (Exception ex)
             {
@@ -166,7 +189,7 @@ namespace NightscoutTrayIconMonitor
                 TrayIcon.Text = String.Join("  ",
                     md.SGV.ToString(),
                     md.Direction,
-                    (md.SGV - LastReadSGV).ToString(),
+                    GetOffset(md.SGV,md.SGVOld),
                     ((md.ServerDateTime).Subtract(LastReadDateTime)).Minutes + "m."
                 );
 
@@ -177,17 +200,15 @@ namespace NightscoutTrayIconMonitor
             }
         }
 
-        private MonitorData GetMonitorData()
+        private string[] GetEntriesData(string data)
         {
-            string[] response = Regex.Split(GetServerResponse(), @"\s+");
+            string[] response = Regex.Split(data, @"\s+");
             if (response != null && response.Length >= 5)
             {
                 if (int.TryParse(response[2], out int rgv))
                 {
                     string direction = response[3].Replace("\"", "");
-                    DateTime dtServer = GetServerTime();
-                    DateTime dtNow = DateTime.Parse(response[0].Replace("\"", ""));
-                    return new MonitorData(rgv, direction, dtServer, dtNow, string.Join(" - ", response));
+                    return new string[] { response[0], rgv.ToString(), direction };
                 }
                 else
                 {
@@ -197,6 +218,33 @@ namespace NightscoutTrayIconMonitor
             else
             {
                 throw new Exception("Invalid response. Invalid number of parameters recovered: " + string.Join(" ", response));
+            }
+        }
+
+        private MonitorData GetMonitorData()
+        {
+            string[] response = GetServerResponse();
+            if (response != null && response.Length > 1)
+            {
+                string[] currentResponse = GetEntriesData(response[0]);
+                string[] previousResponse = GetEntriesData(response[1]);
+                if (!int.TryParse(currentResponse[1], out int rgv))
+                {
+                    throw new Exception("Invalid response. Unexpected RGV response: " + currentResponse[2]);
+                }
+                if (!int.TryParse(previousResponse[1], out int previousRgv))
+                {
+                    throw new Exception("Invalid response. Unexpected previous RGV response: " + previousResponse[2]);
+                }
+                string direction = currentResponse[2].Replace("\"", "");
+                DateTime dtServer = GetServerTime();
+                DateTime dtNow = DateTime.Parse(currentResponse[0].Replace("\"", ""));
+                return new MonitorData(rgv, previousRgv, direction, dtServer, dtNow, string.Join(" - ", currentResponse));
+
+            }
+            else
+            {
+                throw new Exception("Invalid response. Couldn't get any entries: " + string.Join(" ", response.ToString()));
             }
         }
 
@@ -224,18 +272,23 @@ namespace NightscoutTrayIconMonitor
             }
         }
 
-        private string GetServerResponse()
+        private string GetApiPath(string service)
+        {
+            return ServerPath + service + "?token=" + ServerToken;
+        }
+
+        private string[] GetServerResponse()
         {
             WebClient wc = new WebClient();
-            string result = wc.DownloadString(System.Configuration.ConfigurationManager.AppSettings["Server"] + "entries")
-                .Split(Environment.NewLine.ToCharArray()).FirstOrDefault();
+            string[] result = wc.DownloadString(GetApiPath("entries"))
+                .Split(Environment.NewLine.ToCharArray()).Where(x => !string.IsNullOrEmpty(x)).ToArray();
             return result;
         }
 
         private DateTime GetServerTime()
         {
             WebClient wc = new WebClient();
-            string result = wc.DownloadString(System.Configuration.ConfigurationManager.AppSettings["Server"] + "status.json");
+            string result = wc.DownloadString(GetApiPath("status.json"));
             //dynamic objResult = JsonConvert.DeserializeObject(result);
             JObject objResult = JObject.Parse(result);
             if (DateTime.TryParse(objResult["serverTime"].ToString(), out DateTime dtResult))
