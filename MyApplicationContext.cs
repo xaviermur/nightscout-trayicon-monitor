@@ -14,13 +14,13 @@ namespace NightscoutTrayIconMonitor
 
     public class MonitorData
     {
-        public int SGV { get; set; }
-        public int SGVOld { get; set; }
+        public decimal SGV { get; set; }
+        public decimal SGVOld { get; set; }
         public string Direction { get; set; }
         public DateTime ServerDateTime { get; set; }
         public DateTime LastReadDateTime { get; set; }
         public string Response { get; set; }
-        public MonitorData(int sgv, int sgvOld, string direction, DateTime serverDateTime, DateTime lastReadDateTime, string response)
+        public MonitorData(decimal sgv, decimal sgvOld, string direction, DateTime serverDateTime, DateTime lastReadDateTime, string response)
         {
             SGV = sgv;
             SGVOld = sgvOld;
@@ -36,11 +36,11 @@ namespace NightscoutTrayIconMonitor
         //Component declarations
         private NotifyIcon TrayIcon;
         private ContextMenuStrip TrayIconContextMenu;
+        private ToolStripMenuItem ConfigMenuItem;
         private ToolStripMenuItem CloseMenuItem;
-        private int LastReadSGV;
         private DateTime LastReadDateTime;
-        private string ServerPath;
-        private string ServerToken;
+        private Timer Timer;
+        public UserConfig Config { get; set; }
 
         private enum TypeLog { DEBUG, INFO, ERROR };
         public MyApplicationContext()
@@ -48,8 +48,40 @@ namespace NightscoutTrayIconMonitor
             Application.ApplicationExit += new EventHandler(this.OnApplicationExit);
 
             InitializeComponent();
+            Config = new UserConfig();
+            Config.Read();
+
+            try
+            {
+                MonitorData _md = GetMonitorData();
+                StartMonitor();
+            }
+            catch (Exception ex)
+            {
+                FormUserConfig _formUserConfig = new FormUserConfig();
+                _formUserConfig.OnClose += _formUserConfig_OnClose;
+                _formUserConfig.Show();
+            }
 
             TrayIcon.Visible = true;
+        }
+
+        private void _formUserConfig_OnClose(object sender, EventArgs e)
+        {
+            Config = new UserConfig();
+            Config.Read();
+
+            try
+            {
+                MonitorData _md = GetMonitorData();
+                StartMonitor();
+            }
+            catch (Exception ex)
+            {
+                FormUserConfig _formUserConfig = new FormUserConfig();
+                _formUserConfig.OnClose += _formUserConfig_OnClose;
+                _formUserConfig.Show();
+            }
         }
 
         private void InitializeComponent()
@@ -69,47 +101,61 @@ namespace NightscoutTrayIconMonitor
 
             //Optional - Add a context menu to the TrayIcon:
             TrayIconContextMenu = new ContextMenuStrip();
+            ConfigMenuItem = new ToolStripMenuItem();
             CloseMenuItem = new ToolStripMenuItem();
             TrayIconContextMenu.SuspendLayout();
 
-            ServerPath = System.Configuration.ConfigurationManager.AppSettings["Server"];
-            ServerToken = System.Configuration.ConfigurationManager.AppSettings["Token"];
-            if (string.IsNullOrEmpty(ServerPath) || string.IsNullOrEmpty(ServerToken))
+            // 
+            // TrayIconContextMenu
+            // 
+            this.TrayIconContextMenu.Items.AddRange(new ToolStripItem[] {
+                this.ConfigMenuItem,this.CloseMenuItem
+            });
+            this.TrayIconContextMenu.Name = "TrayIconContextMenu";
+            this.TrayIconContextMenu.Size = new Size(250, 70);
+            // 
+            // ConfigMenuItem
+            // 
+            this.ConfigMenuItem.Name = "ConfigMenuItem";
+            this.ConfigMenuItem.Size = new Size(152, 22);
+            this.ConfigMenuItem.Text = "Config";
+            this.ConfigMenuItem.Click += new EventHandler(this.ConfigMenuItem_Click);
+            // 
+            // CloseMenuItem
+            // 
+            this.CloseMenuItem.Name = "CloseMenuItem";
+            this.CloseMenuItem.Size = new Size(152, 22);
+            this.CloseMenuItem.Text = "Exit";
+            this.CloseMenuItem.Click += new EventHandler(this.CloseMenuItem_Click);
+
+            TrayIconContextMenu.ResumeLayout(false);
+            TrayIcon.ContextMenuStrip = TrayIconContextMenu;
+            Timer = new Timer();
+        }
+
+        private void StartMonitor()
+        {
+            if (string.IsNullOrEmpty(Config.Data.Server) || string.IsNullOrEmpty(Config.Data.Token))
             {
                 MessageBox.Show("Please, update app.config server and token value and restart again.", "Wrong server info",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Application.Exit();
             }
 
-            // 
-            // TrayIconContextMenu
-            // 
-            this.TrayIconContextMenu.Items.AddRange(new ToolStripItem[] {
-            this.CloseMenuItem});
-            this.TrayIconContextMenu.Name = "TrayIconContextMenu";
-            this.TrayIconContextMenu.Size = new Size(250, 70);
-            // 
-            // CloseMenuItem
-            // 
-            this.CloseMenuItem.Name = "CloseMenuItem";
-            this.CloseMenuItem.Size = new Size(152, 22);
-            this.CloseMenuItem.Text = "Close nighscout remote monitor tray icon program";
-            this.CloseMenuItem.Click += new EventHandler(this.CloseMenuItem_Click);
-
-            TrayIconContextMenu.ResumeLayout(false);
-
-            TrayIcon.ContextMenuStrip = TrayIconContextMenu;
-
+            if (Timer.Enabled)
+            {
+                Timer.Stop();
+            }
             RefreshState();
-            Timer timer = new Timer();
-            if (int.TryParse(System.Configuration.ConfigurationManager.AppSettings["Interval"], out int interval)) {
-                timer.Interval = (interval * 1000); // 10 secs
-                timer.Tick += new EventHandler(RefreshState_Tick);
-                timer.Start();
+            if (Config.Data.Interval > 0)
+            {
+                Timer.Interval = (Config.Data.Interval * 1000); // 10 secs
+                Timer.Tick += new EventHandler(RefreshState_Tick);
+                Timer.Start();
             }
             else
             {
-                MessageBox.Show("Please, update app.config interval value and restart again.", "Wrong interval value", 
+                MessageBox.Show("Please, update app.config interval value and restart again.", "Wrong interval value",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Application.Exit();
             }
@@ -121,10 +167,15 @@ namespace NightscoutTrayIconMonitor
             TrayIcon.Visible = false;
         }
 
-        private string GetOffset(int current, int previous)
+        private string GetFormatSGV(decimal value)
+        {
+            return Config.Data.Units == "mmol" ? value.ToString("0.0") : ((int)value).ToString();
+        }
+
+        private string GetOffset(decimal current, decimal previous)
         {
             string symbol = (current >= previous) ? "+" : "";
-            return symbol + (current - previous).ToString();
+            return symbol + GetFormatSGV(current - previous);
         }
 
         private void TrayIcon_Click(object sender, MouseEventArgs e)
@@ -136,14 +187,12 @@ namespace NightscoutTrayIconMonitor
                     MonitorData md = GetMonitorData();
                     if (!LastReadDateTime.Equals(md.LastReadDateTime))
                     {
-                        LastReadSGV = md.SGV;
                         LastReadDateTime = md.LastReadDateTime.AddHours(-1);
                     }
                     string info = String.Join(
                         Environment.NewLine,
-                        md.SGV.ToString() + " (" + GetOffset(md.SGV,md.SGVOld) + ")",
+                        GetFormatSGV(md.SGV) + " (" + GetOffset(md.SGV,md.SGVOld) + ")",
                         md.Direction,
-                        (md.SGV - md.SGVOld).ToString(),
                         ((md.ServerDateTime).Subtract(LastReadDateTime)).Minutes + "m.",
                         md.Response
                     );
@@ -158,6 +207,14 @@ namespace NightscoutTrayIconMonitor
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 WriteLog("Can't refresh state.", TypeLog.ERROR, ex);
             }
+        }
+
+        private void ConfigMenuItem_Click(object sender, EventArgs e)
+        {
+            if (Timer.Enabled) Timer.Stop();
+            FormUserConfig _formUserConfig = new FormUserConfig();
+            _formUserConfig.OnClose += _formUserConfig_OnClose;
+            _formUserConfig.Show();
         }
 
         private void CloseMenuItem_Click(object sender, EventArgs e)
@@ -182,12 +239,11 @@ namespace NightscoutTrayIconMonitor
                 MonitorData md = GetMonitorData();
                 if (!LastReadDateTime.Equals(md.LastReadDateTime))
                 {
-                    LastReadSGV = md.SGV;
                     LastReadDateTime = md.LastReadDateTime.AddHours(-1);
                 }
                 TrayIcon.Icon = GetIcon(md.SGV);
                 TrayIcon.Text = String.Join("  ",
-                    md.SGV.ToString(),
+                    GetFormatSGV(md.SGV),
                     md.Direction,
                     GetOffset(md.SGV,md.SGVOld),
                     ((md.ServerDateTime).Subtract(LastReadDateTime)).Minutes + "m."
@@ -228,18 +284,20 @@ namespace NightscoutTrayIconMonitor
             {
                 string[] currentResponse = GetEntriesData(response[0]);
                 string[] previousResponse = GetEntriesData(response[1]);
-                if (!int.TryParse(currentResponse[1], out int rgv))
+                if (!decimal.TryParse(currentResponse[1], out decimal rgv))
                 {
                     throw new Exception("Invalid response. Unexpected RGV response: " + currentResponse[2]);
                 }
-                if (!int.TryParse(previousResponse[1], out int previousRgv))
+                if (!decimal.TryParse(previousResponse[1], out decimal previousRgv))
                 {
                     throw new Exception("Invalid response. Unexpected previous RGV response: " + previousResponse[2]);
                 }
+                decimal frgv = (Config.Data.Units == "mmol") ? rgv / 18 : rgv;
+                decimal fpreviousrgv = (Config.Data.Units == "mmol") ? previousRgv / 18 : previousRgv;
                 string direction = currentResponse[2].Replace("\"", "");
                 DateTime dtServer = GetServerTime();
                 DateTime dtNow = DateTime.Parse(currentResponse[0].Replace("\"", ""));
-                return new MonitorData(rgv, previousRgv, direction, dtServer, dtNow, string.Join(" - ", currentResponse));
+                return new MonitorData(frgv, fpreviousrgv, direction, dtServer, dtNow, string.Join(" - ", currentResponse));
 
             }
             else
@@ -274,7 +332,7 @@ namespace NightscoutTrayIconMonitor
 
         private string GetApiPath(string service)
         {
-            return ServerPath + service + "?token=" + ServerToken;
+            return Config.Data.Server + service + "?token=" + Config.Data.Token;
         }
 
         private string[] GetServerResponse()
@@ -301,9 +359,9 @@ namespace NightscoutTrayIconMonitor
             }
         }
 
-        private Icon GetIcon(int value)
+        private Icon GetIcon(decimal value)
         {
-            String str = value.ToString();
+            String str = GetFormatSGV(value);
 
             //white pen to draw some lines in the icon
             Pen pen = new Pen(Color.White);
@@ -312,10 +370,10 @@ namespace NightscoutTrayIconMonitor
             SolidBrush brush = new SolidBrush(Color.White);
 
             //create a small font to write the values in the bitmap
-            Font font = new Font("Tahoma", 8.5F);
+            Font font = (Config.Data.Units == "mmol") ? new Font("Tahoma", 7.5F) : new Font("Tahoma", 8.5F);
 
             //origin for the string
-            PointF origin = new PointF(-3.2F, 2F);
+            PointF origin = (Config.Data.Units == "mmol") ? new PointF(-3.5F, 2F) : new PointF(-3.2F, 2F);
 
             //create a new bitmap with 16x16 pixel
             Bitmap bitmap = new Bitmap(16, 16);
