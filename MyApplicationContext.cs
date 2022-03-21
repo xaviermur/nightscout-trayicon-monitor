@@ -3,6 +3,7 @@ using Newtonsoft.Json.Linq;
 using NLog;
 using System;
 using System.Configuration;
+using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
 using System.Net;
@@ -184,7 +185,7 @@ namespace NightscoutTrayIconMonitor
             {
                 if(e.Button == MouseButtons.Left)
                 {
-                    MonitorData md = GetMonitorData();
+                    /*MonitorData md = GetMonitorData();
                     if (!LastReadDateTime.Equals(md.LastReadDateTime))
                     {
                         LastReadDateTime = md.LastReadDateTime.AddHours(-1);
@@ -198,7 +199,9 @@ namespace NightscoutTrayIconMonitor
                     );
                     TrayIcon.BalloonTipText = info;
                     TrayIcon.BalloonTipTitle = "Server response";
-                    TrayIcon.ShowBalloonTip(10000);
+                    TrayIcon.ShowBalloonTip(10000);*/
+                    Uri myUri = new Uri(Config.Data.Server);
+                    Process.Start(myUri.GetLeftPart(UriPartial.Authority));
                 }
             }
             catch (Exception ex)
